@@ -110,6 +110,12 @@ p { margin: 0; }
 .bbtn svg { width: 100%; max-width: 46px; height: 30px; color: var(--stool-ink); }
 .bbtn .n { font-family: var(--font-mono); font-size: 15px; }
 .bbtn .band { width: 18px; height: 4px; border-radius: 2px; }
+.bbtn.on { border: 2px solid var(--accent); background: var(--accent-soft); padding: 7px 1px 5px; }
+.sizes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.size { border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 10px 4px; font-weight: 700; display: grid; justify-items: center; align-content: center; gap: 6px; min-height: 64px; }
+.size:hover { background: var(--surface-2); }
+.size.on { border: 2px solid var(--accent); background: var(--accent-soft); color: var(--accent); }
+.size i { display: block; border-radius: 50%; background: var(--stool-ink); }
 .bandlegend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .bandlegend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
 .symrow { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 8px; }
@@ -388,6 +394,8 @@ const SYM = {
   stool: { label: "Bowel movement", color: "var(--stool-ink)" }
 };
 const SEV = ["", "Mild", "Moderate", "Strong"];
+const SIZES = [["S", "Small", 8], ["M", "Medium", 13], ["L", "Large", 18]];
+const SIZE_NAME = { S: "small", M: "medium", L: "large" };
 
 function bristolSvg(n) {
   const s = 'fill="currentColor"';
@@ -632,6 +640,7 @@ function metrics(day) {
     burps: ev.filter(e => e.type === "burp").length,
     gas: ev.filter(e => e.type === "gas").length,
     stools: stools.map(e => e.v),
+    stoolTxt: stools.map(e => e.v + (e.size ? " " + SIZE_NAME[e.size] : "")),
     logged: ev.length > 0 || !!mealsLogged || !!(day && day.challenge)
   };
 }
@@ -807,7 +816,7 @@ function timeline(day) {
     if (it.kind === "ch") return `<div class="tl-item"><span class="tl-time">${esc(it.t)}</span><span class="tl-mark ch"></span><span class="tl-text"><strong>Reintroduction</strong> <small>${esc(it.c.food)}${gramsTxt(it.c) ? ", " + gramsTxt(it.c) : ""}, with ${mealLabel(chMeal(it.c)).toLowerCase()}</small></span><span></span></div>`;
     const e = it.e;
     let color = SYM[e.type].color, text;
-    if (e.type === "stool") { const b = BRISTOL[e.v - 1]; color = `var(--${b.band})`; text = `<strong>Bristol ${e.v}</strong> <small>${b.label}</small>`; }
+    if (e.type === "stool") { const b = BRISTOL[e.v - 1]; color = `var(--${b.band})`; text = `<strong>Bristol ${e.v}</strong> <small>${b.label}${e.size ? " · " + SIZE_NAME[e.size] : ""}</small>${e.note ? `<br><small>${esc(e.note)}</small>` : ""}`; }
     else if (e.type === "bloat") text = `<strong>Bloating</strong> <small>${SEV[e.v || 1].toLowerCase()}</small>`;
     else text = `<strong>${SYM[e.type].label}</strong>`;
     const editing = state.editing === e.id;
@@ -939,7 +948,54 @@ function renderSheet() {
       </div>
     </div>`;
 }
-function closeSheet() { state.sheet = null; renderSheet(); }
+function closeSheet() { state.sheet = null; state.stool = null; renderSheet(); }
+
+/* ---------- Stool sheet: type, size and comments ---------- */
+function openStool(v, id) {
+  const ev = id ? (getDay(state.date).events || []).find(e => e.id === id) : null;
+  state.stool = { id: ev ? ev.id : null, v: ev ? ev.v : v, size: ev ? ev.size || "" : "", note: ev ? ev.note || "" : "", t: ev ? ev.t : nowHM() };
+  state.editing = null;
+  renderStool();
+}
+function renderStool() {
+  const host = document.getElementById("overlay");
+  const s = state.stool;
+  if (!s) { host.innerHTML = ""; document.body.style.overflow = ""; return; }
+  document.body.style.overflow = "hidden";
+  const b = BRISTOL[s.v - 1];
+  host.innerHTML = `<div class="scrim" id="scrim"></div>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="stTitle">
+      <div class="sheet-head"><span class="grab"></span>
+        <div class="row" style="justify-content:space-between"><h2 id="stTitle">Bristol ${s.v} · ${b.label}</h2>
+          <label class="row hint" for="stTime">Time <input type="time" id="stTime" class="field mono" style="width:110px;padding:6px 8px" value="${esc(s.t)}"></label></div>
+      </div>
+      <div class="sheet-body">
+        <div class="bristol">${BRISTOL.map(x => `<button class="bbtn ${x.n === s.v ? "on" : ""}" data-stv="${x.n}" aria-label="Bristol type ${x.n}, ${x.label}" aria-pressed="${x.n === s.v}">${bristolSvg(x.n)}<span class="n">${x.n}</span><span class="band" style="background:var(--${x.band})"></span></button>`).join("")}</div>
+        <div class="picker-cat"><span class="eyebrow">Size</span>
+          <div class="sizes">${SIZES.map(([k, l, px]) => `<button class="size ${s.size === k ? "on" : ""}" data-size="${k}" aria-pressed="${s.size === k}"><i style="width:${px}px;height:${px}px"></i>${l}</button>`).join("")}</div></div>
+        <div class="picker-cat"><label class="eyebrow" for="stNote">Comments</label>
+          <textarea class="note" id="stNote" placeholder="Urgency, pain, mucus, colour, feeling of incomplete emptying">${esc(s.note)}</textarea></div>
+      </div>
+      <div class="sheet-foot"><div class="row" style="justify-content:space-between">
+        ${s.id ? '<button class="btn ghost danger" id="stDel">Delete</button>' : '<button class="btn ghost" id="stCancel">Cancel</button>'}
+        <button class="btn primary" id="stSave">${s.id ? "Save changes" : "Log it"}</button></div></div>
+    </div>`;
+}
+function saveStool() {
+  const s = state.stool; if (!s) return;
+  const day = structuredClone(getDay(state.date));
+  const t = s.t || nowHM();
+  let e = s.id ? day.events.find(x => x.id === s.id) : null;
+  if (!e) { e = { id: uid(), type: "stool" }; day.events.push(e); }
+  e.v = s.v; e.t = t;
+  if (s.size) e.size = s.size; else delete e.size;
+  if (s.note.trim()) e.note = s.note.trim(); else delete e.note;
+  day.events.sort((a, b) => hmToMin(a.t) - hmToMin(b.t));
+  const isNew = !s.id;
+  closeSheet();
+  saveDay(day);
+  toast(isNew ? `Bristol ${s.v}${s.size ? ", " + SIZE_NAME[s.size] : ""} logged at ${t}` : "Changes saved");
+}
 function saveMeal(clear) {
   const s = state.sheet;
   const day = structuredClone(getDay(state.date));
@@ -1043,7 +1099,7 @@ function reintroSection(sched) {
       const cell = (v, bv) => `<td class="num">${flag(v, bv) ? `<span class="hi">${v}</span>` : v}</td>`;
       const label = l ? `${l.c.day ? `Day ${l.c.day}` : "Test"}${gramsTxt(l.c) ? ` · <span class="mono">${esc(gramsTxt(l.c))}</span>` : ""}` : "After";
       return `<tr><td>${label}<br><small class="hint">${fmtDow(d)} ${fmtShort(d)}</small>${ctx}</td>
-        ${cell(m.bloatScore, base && base.bloatScore)}${cell(m.burps, base && base.burps)}${cell(m.gas, base && base.gas)}<td class="num">${m.stools.length ? m.stools.join(", ") : "-"}</td><td class="num">${lag}</td></tr>`;
+        ${cell(m.bloatScore, base && base.bloatScore)}${cell(m.burps, base && base.burps)}${cell(m.gas, base && base.gas)}<td class="num">${m.stoolTxt.length ? m.stoolTxt.join(", ") : "-"}</td><td class="num">${lag}</td></tr>`;
     }).join("");
     const o = outcomeOf(k);
     const recent = diffDays(lastD, t) <= 2;
@@ -1129,7 +1185,7 @@ function drawDaily(sched) {
       const cy = ys + 8 + j * (r * 2 + 1.5);
       svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="var(--${band})" stroke="var(--surface)" stroke-width="1.5"/>`;
     });
-    const tipTxt = `<strong>${fmtDow(dates[i])} ${fmtShort(dates[i])}</strong><br>${k ? `Stools: ${m.stools.map(v => "type " + v).join(", ")}` : "No bowel movement logged"}`;
+    const tipTxt = `<strong>${fmtDow(dates[i])} ${fmtShort(dates[i])}</strong><br>${k ? `Stools: ${m.stoolTxt.map(v => "type " + v).join(", ")}` : "No bowel movement logged"}`;
     svg += `<rect x="${left + i * cw}" y="${ys}" width="${cw}" height="${stoolH}" fill="transparent" data-tip="${esc(tipTxt)}"/>`;
   });
   // x axis labels
@@ -1357,10 +1413,19 @@ document.addEventListener("click", ev => {
   if (el.id === "prevDay") { state.date = addDays(state.date, -1); state.editing = null; render(); return; }
   if (el.id === "nextDay") { if (state.date < todayIso()) state.date = addDays(state.date, 1); state.editing = null; render(); return; }
   if (el.id === "todayBtn") { state.date = todayIso(); render(); return; }
-  if (d.stool) return logEvent("stool", Number(d.stool));
+  if (d.stool) return openStool(Number(d.stool));
+  if (d.stv && state.stool) { state.stool.v = Number(d.stv); renderStool(); return; }
+  if (d.size && state.stool) { state.stool.size = state.stool.size === d.size ? "" : d.size; renderStool(); return; }
+  if (el.id === "stSave") return saveStool();
+  if (el.id === "stCancel") return closeSheet();
+  if (el.id === "stDel" && state.stool) { const id = state.stool.id; closeSheet(); return deleteEvent(id); }
   if (d.bloat) return logEvent("bloat", Number(d.bloat));
   if (d.sym) return logEvent(d.sym);
-  if (d.edit) { state.editing = d.edit; render(); return; }
+  if (d.edit) {
+    const e = (getDay(state.date).events || []).find(x => x.id === d.edit);
+    if (e && e.type === "stool") return openStool(e.v, e.id);
+    state.editing = d.edit; render(); return;
+  }
   if (d.del) return deleteEvent(d.del);
   if (el.hasAttribute("data-done")) { state.editing = null; render(); return; }
   if (el.id === "chOpen") return openMeal(state.date === todayIso() ? mealForTime(nowHM()) : "lunch", true);
@@ -1436,6 +1501,8 @@ document.addEventListener("input", ev => {
     const s = document.getElementById("foodSearch"); s.focus(); s.setSelectionRange(s.value.length, s.value.length);
   }
   if (t.id === "mealNote" && state.sheet) state.sheet.note = t.value;
+  if (t.id === "stNote" && state.stool) state.stool.note = t.value;
+  if (t.id === "stTime" && state.stool) state.stool.t = t.value;
   if (t.id === "mealTime" && state.sheet) state.sheet.time = t.value;
   if (t.id === "chFood" && state.sheet) state.sheet.chg.food = t.value;
   if (t.id === "chGramsIn" && state.sheet) state.sheet.chg.grams = t.value === "" ? null : Number(t.value);
@@ -1443,7 +1510,7 @@ document.addEventListener("input", ev => {
 document.addEventListener("keydown", ev => {
   if (ev.key === "Enter" && ev.target.id === "customFood") { ev.preventDefault(); addCustom(); }
   if (ev.key === "Enter" && ev.target.id === "newFoodName") { ev.preventDefault(); addFood(); }
-  if (ev.key === "Escape" && state.sheet) closeSheet();
+  if (ev.key === "Escape" && (state.sheet || state.stool)) closeSheet();
 });
 document.addEventListener("change", ev => {
   const t = ev.target;
