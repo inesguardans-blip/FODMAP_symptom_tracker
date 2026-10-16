@@ -242,6 +242,10 @@ a { color: var(--accent); }
 
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(86px + env(safe-area-inset-bottom, 0px)); z-index: 50; background: var(--ink); color: var(--bg); border-radius: 14px; padding: 10px 10px 10px 16px; display: flex; gap: 12px; align-items: center; font-size: 14px; box-shadow: var(--shadow); max-width: calc(100% - 32px); }
 .toast button { background: transparent; border: 1px solid color-mix(in srgb, var(--bg) 40%, transparent); color: var(--bg); border-radius: 10px; padding: 5px 10px; font-weight: 700; }
+.login { position: fixed; inset: 0; z-index: 60; background: var(--bg); display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.login form { background: var(--surface); border-radius: 20px; box-shadow: var(--shadow); padding: 24px; width: min(380px, 100%); display: grid; gap: 14px; }
+.login .brand { color: var(--hero); }
+.login .err { color: var(--loose); font-size: 13px; margin: 0; }
 .status-note { font-size: 12px; color: var(--muted); text-align: center; }
 .confirm { border: 1px solid var(--loose); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
 
@@ -293,6 +297,7 @@ a { color: var(--accent); }
 </nav>
 
 <div id="overlay"></div>
+<div id="loginHost"></div>
 <div id="toastHost"></div>
 
 <script>
@@ -463,12 +468,35 @@ function localLoad() {
   try { const raw = localStorage.getItem(LOCAL_KEY); if (raw) { const o = JSON.parse(raw); state.days = o.days || {}; Object.assign(state.settings, o.settings || {}); } } catch (e) {}
 }
 
+/* Three places data can live: the artifact's db (inside Claude), the site's own API (on Vercel), or this browser only. */
+let api = false;
+const PENDING_KEY = "gutlog-pending-v1";
+function pendingGet() { try { return JSON.parse(localStorage.getItem(PENDING_KEY) || "{}"); } catch (e) { return {}; } }
+function pendingSet(p) { try { localStorage.setItem(PENDING_KEY, JSON.stringify(p)); } catch (e) {} }
+function markPending(key, on) { const p = pendingGet(); if (on) p[key] = 1; else delete p[key]; pendingSet(p); }
+
+async function apiCall(method, path, body) {
+  const r = await fetch(path, { method, credentials: "same-origin", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401) { showLogin(); const e = new Error("login"); e.login = true; throw e; }
+  if (!r.ok) throw new Error("http " + r.status);
+  return r.json();
+}
+let offlineWarned = false;
+function wentOffline() {
+  state.backend = "offline";
+  if (!offlineWarned) { offlineWarned = true; toast("Saved on this device. It syncs when you are back online."); }
+}
+
 async function saveDay(day) {
   state.days[day.date] = day;
   render();
   if (db) {
     try { await db.doc("days/" + day.date).set(day); }
     catch (e) { toast("Could not save. Check your connection and try again."); }
+  } else if (api) {
+    localSave(); markPending("d:" + day.date, true);
+    try { await apiCall("PUT", "/api/data", { type: "day", day }); markPending("d:" + day.date, false); if (state.backend === "offline") { state.backend = "api"; render(); } }
+    catch (e) { if (!e.login) wentOffline(); }
   } else localSave();
 }
 async function saveSettings() {
@@ -476,7 +504,80 @@ async function saveSettings() {
   if (db) {
     try { await db.doc("settings/main").set(state.settings); }
     catch (e) { toast("Could not save settings."); }
+  } else if (api) {
+    localSave(); markPending("settings", true);
+    try { await apiCall("PUT", "/api/data", { type: "settings", settings: state.settings }); markPending("settings", false); }
+    catch (e) { if (!e.login) wentOffline(); }
   } else localSave();
+}
+
+const DEFAULT_SETTINGS = () => ({ planStart: "2026-11-01", extraRest: {}, outcomes: {}, customFoods: [], addedFoods: [] });
+function applyServer(o) {
+  const p = pendingGet();
+  const days = { ...(o.days || {}) };
+  Object.keys(p).forEach(k => { if (k.startsWith("d:")) { const d = k.slice(2); if (state.days[d]) days[d] = state.days[d]; } });
+  state.days = days;
+  if (!p.settings) state.settings = Object.assign(DEFAULT_SETTINGS(), o.settings || {});
+  localSave();
+}
+async function flushPending() {
+  const p = pendingGet();
+  for (const k of Object.keys(p)) {
+    if (k === "settings") await apiCall("PUT", "/api/data", { type: "settings", settings: state.settings });
+    else if (state.days[k.slice(2)]) await apiCall("PUT", "/api/data", { type: "day", day: state.days[k.slice(2)] });
+    markPending(k, false);
+  }
+}
+function typingInView() {
+  const a = document.activeElement;
+  return !!(a && a.closest && a.closest("#view") && (a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && a.type !== "checkbox")));
+}
+let syncing = false;
+async function sync() {
+  if (!api || syncing || document.hidden) return;
+  syncing = true;
+  try {
+    await flushPending();
+    applyServer(await apiCall("GET", "/api/data"));
+    state.backend = "api"; offlineWarned = false;
+    if (!typingInView()) render();
+  } catch (e) { if (!e.login) { state.backend = "offline"; if (!typingInView()) render(); } }
+  syncing = false;
+}
+function startSync() {
+  setInterval(sync, 30000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) sync(); });
+  window.addEventListener("online", sync);
+}
+
+function showLogin(msg) {
+  const host = document.getElementById("loginHost");
+  host.innerHTML = `<div class="login"><form id="loginForm">
+    <div class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 3c0 4 10 2 10 7s-10 3-10 8c0 2 2 3 4 3"/><circle cx="17" cy="19" r="2"/></svg>Gut Log</div>
+    <p class="hint">Enter your password to open your log. This device stays signed in for 6 months.</p>
+    <input class="field" type="password" id="loginPw" autocomplete="current-password" placeholder="Password" required>
+    ${msg ? `<p class="err">${esc(msg)}</p>` : ""}
+    <button class="btn primary" type="submit" id="loginBtn">Open my log</button>
+  </form></div>`;
+  const f = document.getElementById("loginForm");
+  document.getElementById("loginPw").focus();
+  f.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const btn = document.getElementById("loginBtn"); btn.disabled = true; btn.textContent = "Checking…";
+    try {
+      const r = await fetch("/api/login", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: document.getElementById("loginPw").value }) });
+      if (r.status === 401) return showLogin("That password is not right. Try again.");
+      if (!r.ok) return showLogin("The server is not set up yet. Check APP_PASSWORD and the database in Vercel.");
+      host.innerHTML = "";
+      api = true; await sync();
+    } catch (e) { showLogin("Could not reach the server. Check your connection."); }
+  });
+}
+async function logout() {
+  try { await fetch("/api/login", { method: "DELETE", credentials: "same-origin" }); } catch (e) {}
+  try { localStorage.removeItem(LOCAL_KEY); localStorage.removeItem(PENDING_KEY); } catch (e) {}
+  state.days = {}; state.settings = DEFAULT_SETTINGS();
+  render(); showLogin();
 }
 
 async function initStorage() {
@@ -484,18 +585,38 @@ async function initStorage() {
   render();
   let ns = null;
   try { ns = window.claude && window.claude.use ? await window.claude.use("db") : null; } catch (e) { ns = null; }
-  if (!ns) { state.backend = "local"; render(); return; }
-  db = ns; state.backend = "db";
-  db.collection("days").onSnapshot(snap => {
-    const days = {};
-    snap.docs.forEach(d => { if (d.exists) days[d.id] = d.data(); });
-    state.days = days; render();
-  }, () => { state.backend = "error"; render(); });
-  db.doc("settings/main").onSnapshot(snap => {
-    if (snap.exists) state.settings = Object.assign({ planStart: "2026-11-01", extraRest: {}, outcomes: {}, customFoods: [], addedFoods: [] }, snap.data());
+  if (ns) {
+    db = ns; state.backend = "db";
+    db.collection("days").onSnapshot(snap => {
+      const days = {};
+      snap.docs.forEach(d => { if (d.exists) days[d.id] = d.data(); });
+      state.days = days; render();
+    }, () => { state.backend = "error"; render(); });
+    db.doc("settings/main").onSnapshot(snap => {
+      if (snap.exists) state.settings = Object.assign(DEFAULT_SETTINGS(), snap.data());
+      render();
+    }, () => {});
     render();
-  }, () => {});
-  render();
+    return;
+  }
+  let wasApi = false;
+  try { wasApi = localStorage.getItem("gutlog-backend") === "api"; } catch (e) {}
+  if (/^https?:$/.test(location.protocol) && !window.claude) {
+    try {
+      const r = await fetch("/api/data", { credentials: "same-origin" });
+      const isJson = (r.headers.get("content-type") || "").includes("json");
+      if (r.status === 401 && isJson) { api = true; state.backend = "api"; startSync(); showLogin(); return; }
+      if (r.ok && isJson) {
+        api = true; state.backend = "api";
+        try { localStorage.setItem("gutlog-backend", "api"); } catch (e) {}
+        await flushPending().catch(() => {});
+        applyServer(await r.json()); render(); startSync(); return;
+      }
+    } catch (e) {
+      if (wasApi) { api = true; state.backend = "offline"; render(); startSync(); return; }
+    }
+  }
+  state.backend = "local"; render();
 }
 
 /* ---------- Day metrics ---------- */
@@ -741,7 +862,7 @@ function renderToday(sched) {
 
 function storageNote() {
   const s = state.backend;
-  const txt = s === "db" ? "Saved to your account. Syncs across your devices." : s === "local" ? "Saved in this browser only." : s === "error" ? "Sync stopped. Reload the page to reconnect." : "Connecting…";
+  const txt = s === "db" || s === "api" ? "Saved to your account. Syncs across your devices." : s === "offline" ? "Offline. Changes are kept on this device and sync when you reconnect." : s === "local" ? "Saved in this browser only." : s === "error" ? "Sync stopped. Reload the page to reconnect." : "Connecting…";
   return `<p class="status-note">${txt}</p>`;
 }
 
@@ -1171,6 +1292,7 @@ function renderSettings() {
     <section class="card"><div class="sec-head"><h2>Your data</h2></div>
       <p class="hint">Export a backup file, or import one, for example when moving to your own website.</p>
       <div class="row"><button class="btn" id="exportBtn">Export data</button><label class="btn" for="importFile" style="cursor:pointer">Import data</label><input type="file" id="importFile" accept="application/json,.json" hidden></div>
+      ${state.backend === "api" || state.backend === "offline" ? '<div class="row"><button class="btn small ghost" id="logoutBtn">Sign out of this device</button></div>' : ""}
       ${state.confirmImport ? `<div class="confirm"><p>This file has ${Object.keys(state.confirmImport.days || {}).length} days. Days with the same date will be replaced.</p><div class="row"><button class="btn primary" id="importYes">Import</button><button class="btn ghost" id="importNo">Cancel</button></div></div>` : ""}
       ${storageNote()}
     </section>`;
@@ -1182,6 +1304,15 @@ async function exportData() {
   try { dl = window.claude && window.claude.use ? await window.claude.use("downloads") : null; } catch (e) { dl = null; }
   if (dl) {
     try { await dl.save({ filename: `gut-log-${todayIso()}.json`, data }); toast("Backup saved"); return; } catch (e) { /* fall back to copy */ }
+  }
+  if (!window.claude) {
+    try {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([data], { type: "application/json" }));
+      a.download = `gut-log-${todayIso()}.json`; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast("Backup downloaded"); return;
+    } catch (e) { /* fall back to copy */ }
   }
   try { await navigator.clipboard.writeText(data); toast("Backup copied to the clipboard"); }
   catch (e) { toast("Could not export from this view."); }
@@ -1198,6 +1329,10 @@ async function doImport() {
       if (o.settings) await db.doc("settings/main").set(state.settings);
       toast(`Imported ${Object.keys(days).length} days`);
     } catch (e) { toast("Import stopped partway. Try again."); }
+  } else if (api) {
+    localSave();
+    try { await apiCall("PUT", "/api/data", { type: "import", days, settings: o.settings ? state.settings : undefined }); toast(`Imported ${Object.keys(days).length} days`); }
+    catch (e) { if (!e.login) toast("Import did not reach the server. Try again when online."); }
   } else { localSave(); toast(`Imported ${Object.keys(days).length} days`); }
 }
 
@@ -1261,6 +1396,7 @@ document.addEventListener("click", ev => {
   }
   if (d.rmcustom) { state.settings = { ...state.settings, customFoods: (state.settings.customFoods || []).filter(x => x !== d.rmcustom) }; saveSettings(); return; }
   if (el.id === "exportBtn") return exportData();
+  if (el.id === "logoutBtn") return logout();
   if (el.id === "importYes") return doImport();
   if (el.id === "importNo") { state.confirmImport = null; render(); return; }
 });
