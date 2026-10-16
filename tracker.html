@@ -219,6 +219,13 @@ table.rt td.num { font-family: var(--font-mono); }
 .blk select { border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; background: var(--surface); font-size: 13px; }
 .foodcat { display: grid; gap: 6px; padding-block: 8px; border-bottom: 1px solid var(--line); }
 .foodcat:last-child { border-bottom: 0; }
+.addfood { background: var(--surface-2); border-radius: 14px; padding: 12px; display: grid; gap: 10px; }
+.addfood select { border: 1px solid var(--line); border-radius: 12px; padding: 9px 10px; background: var(--surface); }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); }
+.chip.mine { background: var(--accent-soft); }
+.chip-x { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 2px; font-size: 15px; line-height: 1; }
+.chip-x:hover { color: var(--loose); }
 details summary { cursor: pointer; font-weight: 700; }
 ol.rules { margin: 0; padding-left: 20px; display: grid; gap: 6px; color: var(--ink); }
 a { color: var(--accent); }
@@ -309,6 +316,13 @@ const FOODS = [
 ];
 const FOOD_FLAGS = {}; const FOOD_CAT = {};
 FOODS.forEach(c => c.items.forEach(([n, f]) => { FOOD_FLAGS[n] = f || ""; FOOD_CAT[n] = c.cat; }));
+
+function addedFoods() { return state.settings.addedFoods || []; }
+function findAdded(n) { return addedFoods().find(a => a.name.toLowerCase() === n.toLowerCase()); }
+function flagsOf(n) { const a = findAdded(n); return a ? (a.h ? "h" : "") + (a.g ? "g" : "") : (FOOD_FLAGS[n] || ""); }
+function catOf(n) { const a = findAdded(n); return a ? a.cat : FOOD_CAT[n]; }
+function foodList() { return FOODS.map(c => ({ cat: c.cat, note: c.note, items: [...c.items.map(i => i[0]), ...addedFoods().filter(a => a.cat === c.cat).map(a => a.name)] })); }
+function onList(n) { return Object.keys(FOOD_FLAGS).some(k => k.toLowerCase() === n.toLowerCase()) || !!findAdded(n); }
 
 const BLOCKS = [
   { n: 1, group: "Sorbitol", food: "Avocado", g: [30, 60, 90] },
@@ -408,7 +422,8 @@ const state = {
   tab: "today",
   date: todayIso(),
   days: {},
-  settings: { planStart: "2026-11-01", extraRest: {}, outcomes: {}, customFoods: [] },
+  settings: { planStart: "2026-11-01", extraRest: {}, outcomes: {}, customFoods: [], addedFoods: [] },
+  lastCat: "Cereals",
   range: 14,
   backend: "starting",
   editing: null,
@@ -459,7 +474,7 @@ async function initStorage() {
     state.days = days; render();
   }, () => { state.backend = "error"; render(); });
   db.doc("settings/main").onSnapshot(snap => {
-    if (snap.exists) state.settings = Object.assign({ planStart: "2026-11-01", extraRest: {}, outcomes: {}, customFoods: [] }, snap.data());
+    if (snap.exists) state.settings = Object.assign({ planStart: "2026-11-01", extraRest: {}, outcomes: {}, customFoods: [], addedFoods: [] }, snap.data());
     render();
   }, () => {});
   render();
@@ -625,7 +640,7 @@ function timeline(day) {
 
 function mealsSection(day, sched) {
   const e = sched.map[state.date];
-  const fruit = Object.values(day.meals || {}).flatMap(m => m.foods || []).filter(f => FOOD_CAT[f] === "Fruit").length;
+  const fruit = Object.values(day.meals || {}).flatMap(m => m.foods || []).filter(f => catOf(f) === "Fruit").length;
   return `<section class="card" aria-labelledby="mh">
     <div class="sec-head"><h2 id="mh">Meals</h2><span class="hint">Tap a meal to add foods</span></div>
     <div class="meals">${MEALS.map(mm => {
@@ -644,7 +659,7 @@ function mealsSection(day, sched) {
 }
 
 function flagDots(f) {
-  const fl = FOOD_FLAGS[f] || "";
+  const fl = flagsOf(f);
   return (fl.includes("h") ? '<span class="fl" style="background:var(--hist)" title="Histamine"></span>' : "") + (fl.includes("g") ? '<span class="fl" style="background:var(--gluc)" title="Glucose spike"></span>' : "");
 }
 function chipHtml(f) { return `<span class="chip">${flagDots(f)}${esc(f)}</span>`; }
@@ -696,7 +711,7 @@ function renderSheet() {
   const pick = f => `<button class="pick ${sel.has(f) ? "on" : ""}" data-pick="${esc(f)}">${flagDots(f)}${esc(f)}</button>`;
   const recent = recentFoods();
   const custom = state.settings.customFoods || [];
-  const cats = FOODS.map(c => ({ cat: c.cat, note: c.note, items: c.items.map(i => i[0]).filter(n => !q || n.toLowerCase().includes(q)) })).filter(c => c.items.length);
+  const cats = foodList().map(c => ({ cat: c.cat, note: c.note, items: c.items.filter(n => !q || n.toLowerCase().includes(q)) })).filter(c => c.items.length);
   const customMatch = custom.filter(n => !q || n.toLowerCase().includes(q));
   const prev = addDays(state.date, -1);
   const prevMeal = ((state.days[prev] || {}).meals || {})[s.k];
@@ -1042,7 +1057,19 @@ function renderPlan(sched) {
     </section>
     <section class="card"><div class="sec-head"><h2>Your low FODMAP list</h2></div>
       <div class="legend-fl"><span><i style="background:var(--hist)"></i>High in histamine, in moderation</span><span><i style="background:var(--gluc)"></i>Marked glucose spike, in moderation</span></div>
-      <div>${FOODS.map(c => `<div class="foodcat"><h3>${esc(c.cat)}</h3>${c.note ? `<span class="hint">${esc(c.note)}</span>` : ""}<div class="chips">${c.items.map(([f]) => chipHtml(f)).join("")}</div></div>`).join("")}</div>
+      <div class="addfood">
+        <h3>Add a food</h3>
+        <input class="field" id="newFoodName" placeholder="Food name, for example Rice noodles" autocomplete="off">
+        <div class="row">
+          <select id="newFoodCat" aria-label="Category">${FOODS.map(c => `<option ${c.cat === state.lastCat ? "selected" : ""}>${esc(c.cat)}</option>`).join("")}</select>
+          <label class="check" for="newFoodH"><input type="checkbox" id="newFoodH"><span class="fl" style="width:8px;height:8px;border-radius:50%;background:var(--hist)"></span>Histamine</label>
+          <label class="check" for="newFoodG"><input type="checkbox" id="newFoodG"><span class="fl" style="width:8px;height:8px;border-radius:50%;background:var(--gluc)"></span>Glucose spike</label>
+        </div>
+        <div class="row"><button class="btn primary" id="addFoodBtn">Add to my list</button><span class="hint">It shows up in the meal picker right away</span></div>
+      </div>
+      <div>${foodList().map(c => `<div class="foodcat"><h3>${esc(c.cat)}</h3>${c.note ? `<span class="hint">${esc(c.note)}</span>` : ""}<div class="chips">${c.items.map(f => findAdded(f) ? `<span class="chip mine">${flagDots(f)}${esc(f)}<button class="chip-x" data-rmfood="${esc(f)}" aria-label="Remove ${esc(f)}">&#215;</button></span>` : chipHtml(f)).join("")}</div></div>`).join("")}
+      ${(state.settings.customFoods || []).length ? `<div class="foodcat"><h3>Typed in meals</h3><span class="hint">Foods you typed in the meal picker. Add them above with a category to file them properly.</span><div class="chips">${state.settings.customFoods.map(f => `<span class="chip">${esc(f)}<button class="chip-x" data-rmcustom="${esc(f)}" aria-label="Remove ${esc(f)}">&#215;</button></span>`).join("")}</div></div>` : ""}</div>
+      <p class="hint">Foods with a light green background are ones you added. Removing one keeps it in the meals you already logged.</p>
     </section>
     <section class="card"><div class="sec-head"><h2>Your data</h2></div>
       <p class="hint">Export a backup file, or import one, for example when moving to your own website.</p>
@@ -1126,16 +1153,39 @@ document.addEventListener("click", ev => {
     er[n] = Math.max(0, (er[n] || 0) + Number(d.delta));
     state.settings = { ...state.settings, extraRest: er }; saveSettings(); return;
   }
+  if (el.id === "addFoodBtn") return addFood();
+  if (d.rmfood) {
+    const removed = findAdded(d.rmfood); const before = addedFoods();
+    state.settings = { ...state.settings, addedFoods: before.filter(a => a !== removed) }; saveSettings();
+    toast(`${removed.name} removed from your list`, () => { state.settings = { ...state.settings, addedFoods: before }; saveSettings(); });
+    return;
+  }
+  if (d.rmcustom) { state.settings = { ...state.settings, customFoods: (state.settings.customFoods || []).filter(x => x !== d.rmcustom) }; saveSettings(); return; }
   if (el.id === "exportBtn") return exportData();
   if (el.id === "importYes") return doImport();
   if (el.id === "importNo") { state.confirmImport = null; render(); return; }
 });
 
+function addFood() {
+  const name = document.getElementById("newFoodName").value.trim().replace(/\s+/g, " ");
+  const cat = document.getElementById("newFoodCat").value;
+  const h = document.getElementById("newFoodH").checked, g = document.getElementById("newFoodG").checked;
+  if (!name) { toast("Type a food name first"); document.getElementById("newFoodName").focus(); return; }
+  if (onList(name)) { toast(`${name} is already on your list`); return; }
+  state.lastCat = cat;
+  state.settings = { ...state.settings,
+    addedFoods: [...addedFoods(), { name, cat, h, g }],
+    customFoods: (state.settings.customFoods || []).filter(x => x.toLowerCase() !== name.toLowerCase()) };
+  saveSettings();
+  toast(`${name} added to ${cat}`);
+  const inp = document.getElementById("newFoodName"); if (inp) inp.focus();
+}
+
 function addCustom() {
   const inp = document.getElementById("customFood");
   const v = inp.value.trim(); if (!v || !state.sheet) return;
   if (!state.sheet.foods.includes(v)) state.sheet.foods.push(v);
-  if (!FOOD_FLAGS.hasOwnProperty(v) && !(state.settings.customFoods || []).includes(v)) {
+  if (!onList(v) && !(state.settings.customFoods || []).includes(v)) {
     state.settings = { ...state.settings, customFoods: [...(state.settings.customFoods || []), v] };
     saveSettings();
   }
@@ -1155,6 +1205,7 @@ document.addEventListener("input", ev => {
 });
 document.addEventListener("keydown", ev => {
   if (ev.key === "Enter" && ev.target.id === "customFood") { ev.preventDefault(); addCustom(); }
+  if (ev.key === "Enter" && ev.target.id === "newFoodName") { ev.preventDefault(); addFood(); }
   if (ev.key === "Escape" && state.sheet) closeSheet();
 });
 document.addEventListener("change", ev => {
