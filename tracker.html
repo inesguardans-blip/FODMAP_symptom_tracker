@@ -21,6 +21,7 @@
   --bloat: #C47510;
   --burp: #B8407E;
   --gas: #2E6FD6;
+  --diar: #5B6B1E;
   --hard: #A8621C;
   --ideal: #2E8552;
   --loose: #C23F38;
@@ -37,7 +38,7 @@
   :root:not([data-theme="light"]) {
     --bg: #0E1513; --surface: #16201D; --surface-2: #1E2A27; --ink: #E4EEEA; --muted: #98ABA5; --line: #2A3834;
     --accent: #4CC0B2; --accent-ink: #062320; --accent-soft: #173A35; --hero: #123B36; --hero-ink: #EAF7F3; --hero-muted: #8FC2B8;
-    --bloat: #B98029; --burp: #D0679E; --gas: #4E8BE6; --hard: #D2924F; --ideal: #5BBE85; --loose: #EC7670;
+    --bloat: #B98029; --burp: #D0679E; --gas: #4E8BE6; --diar: #5B6B1E; --hard: #D2924F; --ideal: #5BBE85; --loose: #EC7670;
     --hist: #F07A7A; --gluc: #C18CF2; --stool-ink: #D7B79C; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
     color-scheme: dark;
   }
@@ -45,7 +46,7 @@
 :root[data-theme="dark"] {
   --bg: #0E1513; --surface: #16201D; --surface-2: #1E2A27; --ink: #E4EEEA; --muted: #98ABA5; --line: #2A3834;
   --accent: #4CC0B2; --accent-ink: #062320; --accent-soft: #173A35; --hero: #123B36; --hero-ink: #EAF7F3; --hero-muted: #8FC2B8;
-  --bloat: #B98029; --burp: #D0679E; --gas: #4E8BE6; --hard: #D2924F; --ideal: #5BBE85; --loose: #EC7670;
+  --bloat: #B98029; --burp: #D0679E; --gas: #4E8BE6; --diar: #5B6B1E; --hard: #D2924F; --ideal: #5BBE85; --loose: #EC7670;
   --hist: #F07A7A; --gluc: #C18CF2; --stool-ink: #D7B79C; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
   color-scheme: dark;
 }
@@ -646,6 +647,7 @@ function metrics(day) {
     burps: ev.filter(e => e.type === "burp").length,
     gas: ev.filter(e => e.type === "gas").length,
     stools: stools.map(e => e.v),
+    diar: stools.filter(e => e.v >= 6).length,
     stoolTxt: stools.map(e => e.v + (e.size ? " " + SIZE_NAME[e.size] : "")),
     logged: ev.length > 0 || !!mealsLogged || !!(day && day.challenge)
   };
@@ -1066,7 +1068,7 @@ function baseline(sched, beforeDate) {
   }
   if (!vals.length) return null;
   const avg = k => vals.reduce((a, m) => a + m[k], 0) / vals.length;
-  return { n: vals.length, bloatScore: avg("bloatScore"), burps: avg("burps"), gas: avg("gas"), stoolsPerDay: vals.reduce((a, m) => a + m.stools.length, 0) / vals.length };
+  return { n: vals.length, bloatScore: avg("bloatScore"), burps: avg("burps"), gas: avg("gas"), diar: avg("diar"), stoolsPerDay: vals.reduce((a, m) => a + m.stools.length, 0) / vals.length };
 }
 
 function renderInsights(sched) {
@@ -1098,7 +1100,7 @@ function renderInsights(sched) {
     </section>
     ${reintroSection(sched)}
     <section class="card"><div class="sec-head"><h2>Time of day</h2><span class="hint">When symptoms happen, all logged days in range</span></div>
-      <div class="legend"><span><span class="swatch" style="background:var(--bloat)"></span>Bloating</span><span><span class="swatch" style="background:var(--burp)"></span>Burps</span><span><span class="swatch" style="background:var(--gas)"></span>Gas</span></div>
+      <div class="legend"><span><span class="swatch" style="background:var(--bloat)"></span>Bloating</span><span><span class="swatch" style="background:var(--burp)"></span>Burps</span><span><span class="swatch" style="background:var(--gas)"></span>Gas</span><span><span class="swatch" style="background:var(--diar)"></span>Diarrhea (type 6-7)</span></div>
       <div class="chartbox" id="hourChart" data-dates="${dates.join(",")}"></div>
     </section>
     <section class="card"><div class="sec-head"><h2>When you go</h2><span class="hint">Bowel movements by hour, all logged days in range</span></div>
@@ -1107,7 +1109,7 @@ function renderInsights(sched) {
       <div class="chartbox" id="stoolHourChart" data-dates="${dates.join(",")}"></div>
     </section>
     <section class="card"><div class="sec-head"><h2>Meals and symptoms</h2><span class="hint">Last 7 days on a 24-hour line</span></div>
-      <div class="legend"><span><span class="swatch" style="background:var(--muted);border-radius:2px"></span>Meal</span><span><span class="swatch" style="background:var(--accent);border-radius:2px;transform:rotate(45deg)"></span>Challenge food</span><span><span class="swatch" style="background:var(--bloat)"></span>Bloating</span><span><span class="swatch" style="background:var(--burp)"></span>Burps</span><span><span class="swatch" style="background:var(--gas)"></span>Gas</span></div>
+      <div class="legend"><span><span class="swatch" style="background:var(--muted);border-radius:2px"></span>Meal</span><span><span class="swatch" style="background:var(--accent);border-radius:2px;transform:rotate(45deg)"></span>Challenge food</span><span><span class="swatch" style="background:var(--bloat)"></span>Bloating</span><span><span class="swatch" style="background:var(--burp)"></span>Burps</span><span><span class="swatch" style="background:var(--gas)"></span>Gas</span><span><span class="swatch" style="background:var(--diar)"></span>Diarrhea</span></div>
       <div class="chartbox" id="dayLines"></div>
     </section>`;
 }
@@ -1142,7 +1144,7 @@ function reintroSection(sched) {
       const cell = (v, bv) => `<td class="num">${flag(v, bv) ? `<span class="hi">${v}</span>` : v}</td>`;
       const label = l ? `${l.c.day ? `Day ${l.c.day}` : "Test"}${gramsTxt(l.c) ? ` · <span class="mono">${esc(gramsTxt(l.c))}</span>` : ""}` : "After";
       return `<tr><td>${label}<br><small class="hint">${fmtDow(d)} ${fmtShort(d)}</small>${ctx}</td>
-        ${cell(m.bloatScore, base && base.bloatScore)}${cell(m.burps, base && base.burps)}${cell(m.gas, base && base.gas)}<td class="num">${m.stoolTxt.length ? m.stoolTxt.join(", ") : "-"}</td><td class="num">${lag}</td></tr>`;
+        ${cell(m.bloatScore, base && base.bloatScore)}${cell(m.burps, base && base.burps)}${cell(m.gas, base && base.gas)}${cell(m.diar, base && base.diar)}<td class="num">${m.stoolTxt.length ? m.stoolTxt.join(", ") : "-"}</td><td class="num">${lag}</td></tr>`;
     }).join("");
     const o = outcomeOf(k);
     const recent = diffDays(lastD, t) <= 2;
@@ -1150,8 +1152,8 @@ function reintroSection(sched) {
     const title = g.block ? `${esc(g.block.group)} · ${esc([...new Set(ls.map(l => l.c.food))].join(", "))}` : g.key === "other" ? esc(ls[0].c.food) : esc(g.label);
     return `<div class="block-res">
       <div class="row" style="justify-content:space-between"><div><span class="blk-num">${g.block ? `Block ${g.block.n}` : g.key === "other" ? "Other food" : "Bonus"} · from ${fmtShort(ls[0].date)}</span><h3>${title}</h3></div>${pill}</div>
-      <div class="tablewrap"><table class="rt"><thead><tr><th>Day</th><th>Bloating score</th><th>Burps</th><th>Gas</th><th>Stools (Bristol)</th><th>First symptom after food</th></tr></thead><tbody>${body}</tbody></table></div>
-      <p class="hint">${base ? `Your usual (${base.n} low FODMAP days before): bloating score ${r1(base.bloatScore)}, burps ${r1(base.burps)}, gas ${r1(base.gas)}, ${r1(base.stoolsPerDay)} stools a day. <span class="hi">Highlighted</span> values are clearly above that.` : "Log a few low FODMAP days before a test to get a baseline to compare against."}</p>
+      <div class="tablewrap"><table class="rt"><thead><tr><th>Day</th><th>Bloating score</th><th>Burps</th><th>Gas</th><th>Diarrhea</th><th>Stools (Bristol)</th><th>First symptom after food</th></tr></thead><tbody>${body}</tbody></table></div>
+      <p class="hint">${base ? `Your usual (${base.n} low FODMAP days before): bloating score ${r1(base.bloatScore)}, burps ${r1(base.burps)}, gas ${r1(base.gas)}, diarrhea ${r1(base.diar)}, ${r1(base.stoolsPerDay)} stools a day. <span class="hi">Highlighted</span> values are clearly above that.` : "Log a few low FODMAP days before a test to get a baseline to compare against."}</p>
     </div>`;
   }).join("");
   return `<section class="card"><div class="sec-head"><h2>Reintroduction results</h2><a href="${PLAN_DOC}" target="_blank" rel="noopener">Open plan doc</a></div>
@@ -1187,7 +1189,7 @@ function drawDaily(sched) {
   const W = Math.max(box.clientWidth, dates.length * 18 + 90);
   const left = 78, right = 8, top = 22;
   const rowH = 42, gap = 10, axisH = 30;
-  const rows = [{ k: "bloatScore", label: "Bloating", c: "var(--bloat)" }, { k: "burps", label: "Burps", c: "var(--burp)" }, { k: "gas", label: "Gas", c: "var(--gas)" }];
+  const rows = [{ k: "bloatScore", label: "Bloating", c: "var(--bloat)" }, { k: "burps", label: "Burps", c: "var(--burp)" }, { k: "gas", label: "Gas", c: "var(--gas)" }, { k: "diar", label: "Diarrhea", c: "var(--diar)" }];
   const cw = (W - left - right) / dates.length;
   const dotR = Math.min(5, cw / 3), dotStep = dotR * 2 + 2;
   const maxStools = Math.max(1, ...dates.map(d => metrics(state.days[d]).stools.length));
@@ -1274,9 +1276,12 @@ function drawHourStack(box, counts, series, tipFn, label) {
 
 function drawHours() {
   const box = document.getElementById("hourChart"); if (!box) return;
-  const counts = Array.from({ length: 24 }, () => ({ bloat: 0, burp: 0, gas: 0 }));
-  box.dataset.dates.split(",").forEach(d => ((state.days[d] || {}).events || []).forEach(e => { if (counts[0][e.type] !== undefined) counts[Math.floor(hmToMin(e.t) / 60) % 24][e.type]++; }));
-  drawHourStack(box, counts, [["bloat", "var(--bloat)"], ["burp", "var(--burp)"], ["gas", "var(--gas)"]], c => `Bloating ${c.bloat} · Burps ${c.burp} · Gas ${c.gas}`, "Symptoms by hour of day");
+  const counts = Array.from({ length: 24 }, () => ({ bloat: 0, burp: 0, gas: 0, diar: 0 }));
+  box.dataset.dates.split(",").forEach(d => ((state.days[d] || {}).events || []).forEach(e => {
+    const k = e.type === "stool" ? (e.v >= 6 ? "diar" : null) : e.type;
+    if (k && counts[0][k] !== undefined) counts[Math.floor(hmToMin(e.t) / 60) % 24][k]++;
+  }));
+  drawHourStack(box, counts, [["bloat", "var(--bloat)"], ["burp", "var(--burp)"], ["gas", "var(--gas)"], ["diar", "var(--diar)"]], c => `Bloating ${c.bloat} · Burps ${c.burp} · Gas ${c.gas} · Diarrhea ${c.diar}`, "Symptoms by hour of day");
 }
 
 function drawStoolHours() {
@@ -1315,7 +1320,12 @@ function drawDayLines() {
     if (day.challenge && day.challenge.ate) { const cx = x(hmToMin(day.challenge.t));
       svg += `<rect x="${cx - 6}" y="${y - 6}" width="12" height="12" transform="rotate(45 ${cx} ${y})" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" data-tip="${esc(`<strong>Reintroduction ${day.challenge.t}</strong><br>${esc(day.challenge.food)} ${esc(gramsTxt(day.challenge))}`)}"/>`; }
     (day.events || []).forEach(e => {
-      if (e.type === "stool") return;
+      if (e.type === "stool") {
+        if (e.v < 6) return;
+        const cx = x(hmToMin(e.t));
+        svg += `<circle cx="${cx}" cy="${y}" r="5" fill="var(--diar)" stroke="var(--surface)" stroke-width="2" data-tip="${esc(`<strong>${e.t}</strong><br>Diarrhea, Bristol ${e.v}`)}"/>`;
+        return;
+      }
       const cx = x(hmToMin(e.t)); const r = e.type === "bloat" ? 4 + (e.v || 1) : 4.5;
       const col = SYM[e.type].color;
       const lbl = e.type === "bloat" ? `${SEV[e.v || 1]} bloating` : SYM[e.type].label;
