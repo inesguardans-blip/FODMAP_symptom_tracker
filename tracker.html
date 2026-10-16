@@ -209,6 +209,7 @@ table.rt { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 4
 table.rt th { text-align: left; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 700; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 table.rt td { padding: 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; vertical-align: top; }
 table.rt td.num { font-family: var(--font-mono); }
+.block-res table.rt td:first-child { min-width: 170px; }
 .hi { background: color-mix(in srgb, var(--loose) 14%, transparent); color: var(--loose); font-weight: 700; border-radius: 6px; padding: 1px 6px; }
 .block-res { border: 1px solid var(--line); border-radius: 14px; padding: 12px; display: grid; gap: 10px; min-width: 0; }
 .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 10px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
@@ -352,6 +353,12 @@ const BONUS = [
   { rest: true }
 ];
 const PLAN_DOC = "https://claude.ai/artifact/63Ft7WNvocB2UybGHqHXTL";
+const GROUPS = [
+  ...BLOCKS.map(b => ({ key: "b" + b.n, block: b, label: `Block ${b.n} · ${b.group}`, food: b.food, portions: b.g })),
+  { key: "ice", label: "Bonus · ice cream", food: "Dairy ice cream", portions: [60, 120] },
+  { key: "pizza", label: "Bonus · pizza", food: "Pizza margherita", portions: [120] },
+  { key: "other", label: "Other food", food: "", portions: [] }
+];
 
 const BRISTOL = [
   { n: 1, label: "Hard lumps", band: "hard" },
@@ -508,6 +515,44 @@ function metrics(day) {
   };
 }
 
+/* ---------- Reintroduction logic: driven by what you log, the plan only suggests ---------- */
+function groupOf(c) { return !c ? null : c.group ? c.group : c.block ? "b" + c.block : "other"; }
+function groupInfo(key) { return GROUPS.find(g => g.key === key) || GROUPS[GROUPS.length - 1]; }
+function challengeLogs() {
+  return Object.values(state.days).filter(d => d.challenge && d.challenge.ate)
+    .map(d => ({ date: d.date, c: d.challenge, g: groupOf(d.challenge) })).sort((a, b) => a.date < b.date ? -1 : 1);
+}
+function resultKey(g, c) { return g.startsWith("b") ? g.slice(1) : g === "other" ? "other:" + (c.food || "").trim().toLowerCase() : g; }
+function outcomeOf(key) { return (state.settings.outcomes || {})[key] || {}; }
+function groupSuggestion(key, date) {
+  const g = groupInfo(key);
+  const n = key === "other" ? 0 : challengeLogs().filter(l => l.g === key && l.date < date).length;
+  const day = g.portions.length ? Math.min(n + 1, g.portions.length) : null;
+  return { group: key, food: g.food, day, grams: day ? g.portions[day - 1] : null };
+}
+function blockDone(n, date) {
+  const cnt = challengeLogs().filter(l => l.g === "b" + n && l.date < date).length;
+  return cnt >= 3 || !!outcomeOf(String(n)).result;
+}
+function suggestion(date) {
+  const logs = challengeLogs().filter(l => l.date < date);
+  const last = logs[logs.length - 1];
+  if (last && last.g.startsWith("b") && !blockDone(last.g.slice(1), date) && diffDays(last.date, date) <= 2) return groupSuggestion(last.g, date);
+  const next = BLOCKS.find(b => !blockDone(b.n, date));
+  return groupSuggestion(next ? "b" + next.n : "other", date);
+}
+function restAfter(date) {
+  // the last test, if it was 1 or 2 days ago and that test looks finished
+  const logs = challengeLogs().filter(l => l.date < date);
+  const last = logs[logs.length - 1];
+  if (!last) return null;
+  const gap = diffDays(last.date, date);
+  if (gap < 1 || gap > 2) return null;
+  return !last.g.startsWith("b") || blockDone(last.g.slice(1), date) ? last : null;
+}
+function gramsTxt(c) { return c && c.grams != null && c.grams !== "" ? `${c.grams} g` : ""; }
+function chTitle(c) { const g = groupInfo(groupOf(c)); return `${g.block ? g.block.group : g.key === "other" ? (c.food || "other food") : g.label}${c.day ? ` day ${c.day}` : ""}`; }
+
 /* ---------- Actions ---------- */
 function mealForTime(t) { const m = hmToMin(t); return m < 660 ? "breakfast" : m < 990 ? "lunch" : m < 1170 ? "snack" : "dinner"; }
 function mealLabel(k) { return (MEALS.find(x => x.k === k) || MEALS[1]).label; }
@@ -538,13 +583,7 @@ function setEventTime(id, t) {
   e.t = t; day.events.sort((a, b) => hmToMin(a.t) - hmToMin(b.t));
   saveDay(day);
 }
-function logChallenge(entry) {
-  const day = structuredClone(getDay(state.date));
-  const t = nowHM();
-  day.challenge = { ate: true, t, food: entry.food, grams: entry.grams, planned: entry.grams, block: entry.block ? entry.block.n : null, day: entry.day || null, meal: mealForTime(t) };
-  saveDay(day);
-  toast(`${entry.food}, ${entry.grams} g logged with ${mealLabel(day.challenge.meal).toLowerCase()}`);
-}
+
 
 /* ---------- Toast ---------- */
 let toastTimer = null;
@@ -564,50 +603,51 @@ function renderHeader(sched) {
   document.getElementById("daySub").textContent = diff === 0 || diff === -1 ? fmtLong(state.date) : (diff < 0 ? `${-diff} days ago` : `In ${diff} days`);
   document.getElementById("nextDay").disabled = state.date >= t;
   document.getElementById("todayBtn").hidden = state.date === t;
-  const e = sched.map[state.date];
   const pill = document.getElementById("phasePill");
   pill.className = "phase";
   let txt;
-  if (!e) {
-    if (state.date < sched.start) { const n = diffDays(state.date, sched.start); txt = `Elimination phase · reintroduction in ${n} day${n === 1 ? "" : "s"}`; }
-    else txt = "Reintroduction plan finished";
-  } else if (e.kind === "challenge") { pill.classList.add("ph-ch"); txt = `Block ${e.block.n} · ${e.block.group} · challenge day ${e.day}`; }
-  else if (e.kind === "rest") { pill.classList.add("ph-rest"); txt = `Block ${e.block.n} · ${e.block.group} · rest day ${e.day}`; }
-  else if (e.kind === "bonus") { pill.classList.add("ph-ch"); txt = `Bonus test · ${e.food}`; }
-  else { pill.classList.add("ph-rest"); txt = "Rest day before the appointment"; }
+  const today = getDay(state.date).challenge;
+  const anyBefore = challengeLogs().some(l => l.date < state.date);
+  const rest = restAfter(state.date);
+  if (today && today.ate) { pill.classList.add("ph-ch"); txt = `Reintroduction · ${chTitle(today)}`; }
+  else if (rest) { pill.classList.add("ph-rest"); txt = `Rest day after ${(rest.c.food || "your test").toLowerCase()}`; }
+  else if (anyBefore) txt = "Reintroduction · between tests";
+  else if (state.date < sched.start) { const n = diffDays(state.date, sched.start); txt = `Elimination phase · plan suggests reintroduction in ${n} day${n === 1 ? "" : "s"}`; }
+  else txt = "Ready to start reintroduction";
   document.getElementById("phaseText").textContent = txt;
 }
 
 /* ---------- Today view ---------- */
 function challengeCard(sched) {
-  const e = sched.map[state.date];
   const day = getDay(state.date);
-  if (!e) {
-    if (state.date < sched.start) {
-      return `<div class="challenge"><div class="eyebrow">Elimination phase</div>
-        <div class="big">Strict low FODMAP</div>
-        <p class="hint">Your first challenge, ${esc(BLOCKS[0].food.toLowerCase())} (${esc(BLOCKS[0].group.toLowerCase())}), starts on ${fmtLong(sched.start)}. Logging now builds the baseline your reintroduction results are compared to.</p></div>`;
-    }
-    return "";
+  const c = day.challenge && day.challenge.ate ? day.challenge : null;
+  const openBtn = (label, primary) => `<button class="btn ${primary ? "primary" : ""}" id="chOpen">${label}</button>`;
+  if (c) {
+    const g = groupInfo(groupOf(c));
+    const dots = g.portions.length > 1 && c.day ? `<div class="daydots">${g.portions.map((_, i) => `<span class="${i < c.day ? "on" : ""}"></span>`).join("")}</div>` : "";
+    return `<div class="challenge"><div class="eyebrow">Reintroduction · ${esc(g.key === "other" ? "other food" : g.label)}${c.day ? ` · day ${c.day}` : ""}</div>
+      <div class="row" style="justify-content:space-between;align-items:baseline"><div class="big">${esc(c.food || "Test food")}</div><div class="grams">${esc(gramsTxt(c))}</div></div>
+      ${dots}
+      <div class="row"><span class="done-pill">&#10003; Logged with ${mealLabel(chMeal(c)).toLowerCase()} at <span class="mono">${esc(c.t)}</span></span><button class="btn small" data-meal="${chMeal(c)}">Change</button></div></div>`;
   }
-  if (e.kind === "rest" || e.kind === "final-rest") {
-    return `<div class="challenge"><div class="eyebrow">${e.kind === "rest" ? `Block ${e.block.n} · rest day ${e.day} of ${((state.settings.extraRest || {})[e.block.n] || 0) + 2}` : "Before the appointment"}</div>
-      <div class="big">Rest day, strict low FODMAP</div>
-      <p class="hint">Keep going until you are back to your usual. If it takes more than 2 days, add a rest day in the Plan tab and the calendar shifts.</p></div>`;
+  const noLogs = !challengeLogs().some(l => l.date < state.date);
+  const rest = restAfter(state.date);
+  const quick = state.date === todayIso() ? mealLabel(mealForTime(nowHM())).toLowerCase() : "a meal";
+  if (noLogs && state.date < sched.start) {
+    return `<div class="challenge"><div class="eyebrow">Elimination phase</div><div class="big">Strict low FODMAP</div>
+      <p class="hint">Your plan suggests starting on ${fmtLong(sched.start)} with ${esc(BLOCKS[0].food.toLowerCase())}. Logging now builds the baseline your results are compared to. If you start on another day, mark that meal as a reintroduction.</p>
+      <div class="row">${openBtn("Log a reintroduction", false)}</div></div>`;
   }
-  const dots = e.kind === "challenge" ? `<div class="daydots">${[1, 2, 3].map(i => `<span class="${i <= e.day ? "on" : ""}"></span>`).join("")}</div>` : "";
-  const eyebrow = e.kind === "challenge" ? `Block ${e.block.n} · ${esc(e.block.group)} · day ${e.day} of 3` : `Bonus test · only if: ${esc(e.onlyIf)}`;
-  const action = day.challenge && day.challenge.ate
-    ? `<div class="ch-ctl"><span class="done-pill">&#10003; Eaten</span>
-        <input type="number" id="chGrams" min="0" step="1" inputmode="numeric" value="${esc(day.challenge.grams)}" aria-label="Grams eaten"><span class="hint">g at</span>
-        <input type="time" id="chTime" value="${esc(day.challenge.t)}" aria-label="Time eaten"><span class="hint">with</span>
-        <select id="chMeal" aria-label="Meal">${MEALS.map(m => `<option value="${m.k}" ${chMeal(day.challenge) === m.k ? "selected" : ""}>${m.label.toLowerCase()}</option>`).join("")}</select>
-        <button class="btn small ghost danger" id="chUndo">Remove</button></div>
-        ${Number(day.challenge.grams) !== Number(e.grams) ? `<p class="hint">Planned portion was ${e.grams} g.</p>` : ""}`
-    : `<div class="row"><button class="btn primary" id="chLog">I ate it now</button><span class="hint">Or add it from the meal you ate it with. Ideally lunch, same meal each day.</span></div>`;
-  return `<div class="challenge"><div class="eyebrow">${eyebrow}</div>
-    <div class="row" style="justify-content:space-between;align-items:baseline"><div class="big">${esc(e.food)}</div><div class="grams">${e.grams} g</div></div>
-    ${dots}${action}</div>`;
+  if (rest) {
+    return `<div class="challenge"><div class="eyebrow">Rest day</div><div class="big">Strict low FODMAP</div>
+      <p class="hint">Your last test was ${esc((rest.c.food || "a food").toLowerCase())} on ${fmtDow(rest.date)} ${fmtShort(rest.date)}. Stay on strict low FODMAP until you are back to your usual, then start the next test.</p>
+      <div class="row">${openBtn("Log a reintroduction anyway", false)}</div></div>`;
+  }
+  const sug = suggestion(state.date);
+  const g = groupInfo(sug.group);
+  return `<div class="challenge"><div class="eyebrow">Suggested next test · ${esc(g.label)}${sug.day ? ` · day ${sug.day}` : ""}</div>
+    <div class="row" style="justify-content:space-between;align-items:baseline"><div class="big">${esc(sug.food || "Choose a food to test")}</div><div class="grams">${sug.grams ? sug.grams + " g" : ""}</div></div>
+    <div class="row">${openBtn(`Log it with ${quick}`, true)}<span class="hint">You can change the food and portion.</span></div></div>`;
 }
 
 function quickLog(day) {
@@ -643,7 +683,7 @@ function timeline(day) {
   if (!items.length) return `<div class="empty">Nothing logged ${state.date === todayIso() ? "today" : "on this day"} yet. Tap a symptom above or add a meal below.</div>`;
   return `<div class="tl">${items.map(it => {
     if (it.kind === "meal") return `<div class="tl-item"><span class="tl-time">${esc(it.t)}</span><span class="tl-mark mealm"></span><span class="tl-text"><strong>${it.mm.label}</strong> <small>${esc(it.m.foods.join(", "))}</small></span><span></span></div>`;
-    if (it.kind === "ch") return `<div class="tl-item"><span class="tl-time">${esc(it.t)}</span><span class="tl-mark ch"></span><span class="tl-text"><strong>Reintroduction</strong> <small>${esc(it.c.food)}, ${it.c.grams} g, with ${mealLabel(chMeal(it.c)).toLowerCase()}</small></span><span></span></div>`;
+    if (it.kind === "ch") return `<div class="tl-item"><span class="tl-time">${esc(it.t)}</span><span class="tl-mark ch"></span><span class="tl-text"><strong>Reintroduction</strong> <small>${esc(it.c.food)}${gramsTxt(it.c) ? ", " + gramsTxt(it.c) : ""}, with ${mealLabel(chMeal(it.c)).toLowerCase()}</small></span><span></span></div>`;
     const e = it.e;
     let color = SYM[e.type].color, text;
     if (e.type === "stool") { const b = BRISTOL[e.v - 1]; color = `var(--${b.band})`; text = `<strong>Bristol ${e.v}</strong> <small>${b.label}</small>`; }
@@ -657,7 +697,6 @@ function timeline(day) {
 }
 
 function mealsSection(day, sched) {
-  const e = sched.map[state.date];
   const fruit = Object.values(day.meals || {}).flatMap(m => m.foods || []).filter(f => catOf(f) === "Fruit").length;
   return `<section class="card" aria-labelledby="mh">
     <div class="sec-head"><h2 id="mh">Meals</h2><span class="hint">Tap a meal to add foods</span></div>
@@ -668,12 +707,12 @@ function mealsSection(day, sched) {
       return `<button class="meal ${chHere ? "has-ch" : ""}" data-meal="${mm.k}">
         ${chHere ? '<span class="ch-badge">Reintroduction</span>' : ""}
         <div class="meal-head"><h3>${mm.label}</h3><span>${foods.length ? esc(m.time || mm.def) : chHere ? esc(day.challenge.t) : ""}</span></div>
-        ${foods.length || chHere ? `<div class="chips">${chHere ? `<span class="chip ch">${esc(day.challenge.food)} ${day.challenge.grams} g</span>` : ""}${foods.map(f => chipHtml(f)).join("")}</div>` : `<span class="add">+ Add foods</span>`}
+        ${foods.length || chHere ? `<div class="chips">${chHere ? `<span class="chip ch">${esc(day.challenge.food)} ${esc(gramsTxt(day.challenge))}</span>` : ""}${foods.map(f => chipHtml(f)).join("")}</div>` : `<span class="add">+ Add foods</span>`}
         ${m.note ? `<span class="hint">${esc(m.note)}</span>` : ""}
       </button>`;
     }).join("")}</div>
     ${fruit > 2 ? `<div class="warn">${fruit} fruit servings today. Your list advises a maximum of 2 a day, eaten with other foods.</div>` : ""}
-    ${e && e.kind === "challenge" ? `<p class="hint">Keep the rest of your plate low FODMAP and similar from day to day so the challenge result is clean.</p>` : ""}
+    ${day.challenge && day.challenge.ate ? `<p class="hint">Keep the rest of your plate low FODMAP and similar from day to day so the challenge result is clean.</p>` : ""}
   </section>`;
 }
 
@@ -707,15 +746,18 @@ function storageNote() {
 }
 
 /* ---------- Meal sheet ---------- */
-function openMeal(k) {
+function openMeal(k, reintro) {
   const day = getDay(state.date);
   const m = (day.meals || {})[k] || {};
   const mm = MEALS.find(x => x.k === k);
   const c = day.challenge;
-  state.sheet = { k, foods: [...(m.foods || [])], time: m.time || (c && c.ate && chMeal(c) === k ? c.t : (state.date === todayIso() ? nowHM() : mm.def)), note: m.note || "", q: "",
-    ch: !!(c && c.ate && chMeal(c) === k), chGrams: c && c.ate ? c.grams : null };
+  const here = !!(c && c.ate && chMeal(c) === k);
+  state.sheet = { k, foods: [...(m.foods || [])], time: m.time || (here ? c.t : (state.date === todayIso() ? nowHM() : mm.def)), note: m.note || "", q: "",
+    ch: here || !!reintro,
+    chg: here ? { group: groupOf(c), food: c.food || "", day: c.day || null, grams: c.grams ?? null } : suggestion(state.date) };
   renderSheet();
 }
+
 function recentFoods() {
   const count = {};
   Object.values(state.days).forEach(d => Object.values(d.meals || {}).forEach(m => (m.foods || []).forEach(f => { count[f] = (count[f] || 0) + 1; })));
@@ -736,16 +778,22 @@ function renderSheet() {
   const customMatch = custom.filter(n => !q || n.toLowerCase().includes(q));
   const prev = addDays(state.date, -1);
   const prevMeal = ((state.days[prev] || {}).meals || {})[s.k];
-  const plan = buildSchedule(state.settings).map[state.date];
-  const isCh = plan && (plan.kind === "challenge" || plan.kind === "bonus");
   const dc = getDay(state.date).challenge;
   const elsewhere = dc && dc.ate && chMeal(dc) !== s.k;
-  const chBanner = isCh && !q ? `<div class="ch-sheet ${s.ch ? "on" : ""}">
-      <div><span class="ch-badge">Reintroduction${plan.kind === "challenge" ? ` · day ${plan.day}` : ""}</span><br><strong>${esc(plan.food)}</strong> <span class="mono">${plan.grams} g planned</span>
-      ${elsewhere && !s.ch ? `<br><span class="hint">Logged with ${mealLabel(chMeal(dc)).toLowerCase()}. Adding it here moves it.</span>` : ""}</div>
-      <div class="ch-ctl">${s.ch ? `<input type="number" id="sheetChGrams" min="0" step="1" inputmode="numeric" value="${esc(s.chGrams ?? plan.grams)}" aria-label="Grams eaten"><span class="hint">g</span>` : ""}
-        <button class="btn small ${s.ch ? "" : "primary"}" id="toggleCh">${s.ch ? "Remove" : "Add to this meal"}</button></div>
-    </div>` : "";
+  const gi = groupInfo(s.chg.group);
+  const gs = groupSuggestion(s.chg.group, state.date);
+  const sugTxt = gi.portions.length ? `Plan portions: ${gi.portions.map(x => x + " g").join(", ")}.${gs.day ? ` Next for you: day ${gs.day}, ${gs.grams} g.` : ""}` : "Type the food and portion you are testing.";
+  const chBanner = q ? "" : s.ch ? `<div class="ch-sheet on" style="display:grid;gap:10px">
+      <div class="row" style="justify-content:space-between"><span class="ch-badge">Reintroduction</span><button class="btn small ghost" id="toggleCh">Not a reintroduction</button></div>
+      <label class="hint" for="chGroup">What are you testing?</label>
+      <select id="chGroup" class="field">${GROUPS.map(g => `<option value="${g.key}" ${g.key === s.chg.group ? "selected" : ""}>${esc(g.label)}${g.food ? " · " + esc(g.food) : ""}</option>`).join("")}</select>
+      <input class="field" id="chFood" value="${esc(s.chg.food)}" placeholder="Food you are reintroducing" autocomplete="off" aria-label="Food you are reintroducing">
+      <div class="ch-ctl">${gi.portions.length > 1 ? `<span class="hint">Day</span>${gi.portions.map((_, i) => `<button class="pick ${s.chg.day === i + 1 ? "on" : ""}" data-chday="${i + 1}">${i + 1}</button>`).join("")}` : ""}
+        <input type="number" id="chGramsIn" min="0" step="1" inputmode="numeric" value="${esc(s.chg.grams ?? "")}" aria-label="Portion in grams" placeholder="0"><span class="hint">g</span></div>
+      <span class="hint">${esc(sugTxt)}${elsewhere ? ` Already logged with ${mealLabel(chMeal(dc)).toLowerCase()}; saving here moves it.` : ""}</span>
+    </div>` : `<button class="ch-sheet" id="toggleCh" style="width:100%;text-align:left;background:transparent">
+      <span><span class="ch-badge">Reintroduction</span><br><span class="hint">Tap if this meal includes a food you are testing${elsewhere ? `. Today's is logged with ${mealLabel(chMeal(dc)).toLowerCase()}` : ""}</span></span>
+      <span class="btn small primary" aria-hidden="true">Mark</span></button>`;
   const body = `
     ${chBanner}
     ${s.foods.length ? `<div class="picker-cat"><span class="eyebrow">On your plate</span><div class="chips">${s.foods.map(f => `<button class="pick on" data-pick="${esc(f)}">${flagDots(f)}${esc(f)} &#215;</button>`).join("")}</div></div>` : ""}
@@ -777,12 +825,13 @@ function saveMeal(clear) {
   day.meals = day.meals || {};
   if (clear || !s.foods.length) delete day.meals[s.k];
   else day.meals[s.k] = { foods: s.foods, time: s.time, note: s.note };
-  const plan = buildSchedule(state.settings).map[state.date];
   const wasHere = day.challenge && day.challenge.ate && chMeal(day.challenge) === s.k;
-  if (s.ch && !clear && plan && plan.food) {
-    const g = Number(s.chGrams ?? plan.grams);
-    day.challenge = { ...(day.challenge || {}), ate: true, t: s.time, food: plan.food, grams: isNaN(g) ? plan.grams : g, planned: plan.grams,
-      block: plan.block ? plan.block.n : null, day: plan.day || null, meal: s.k };
+  if (s.ch && !clear) {
+    const g = groupInfo(s.chg.group);
+    const grams = s.chg.grams === "" || s.chg.grams == null || isNaN(Number(s.chg.grams)) ? null : Number(s.chg.grams);
+    day.challenge = { ate: true, t: s.time, meal: s.k, group: g.key, block: g.block ? g.block.n : null,
+      food: (s.chg.food || g.food || "Test food").trim(), day: s.chg.day || null, grams,
+      planned: s.chg.day && g.portions[s.chg.day - 1] != null ? g.portions[s.chg.day - 1] : null };
   } else if (wasHere) day.challenge = null;
   closeSheet();
   saveDay(day);
@@ -796,8 +845,7 @@ function baseline(sched, beforeDate) {
   const vals = [];
   for (let i = 1; i <= 30 && vals.length < 7; i++) {
     const d = addDays(beforeDate, -i);
-    const e = sched.map[d];
-    if (e && (e.kind === "challenge" || e.kind === "bonus")) continue;
+    if (state.days[d] && state.days[d].challenge && state.days[d].challenge.ate) continue;
     const m = metrics(state.days[d]);
     if (m.logged) vals.push(m);
   }
@@ -830,7 +878,7 @@ function renderInsights(sched) {
       ${tile("Gas", "var(--gas)", r1(logged.reduce((a, m) => a + m.gas, 0) / n), "per day")}
     </div>
     <section class="card"><div class="sec-head"><h2>Day by day</h2></div>
-      <div class="legend"><span><span class="swatch" style="background:var(--accent);border-radius:2px;transform:rotate(45deg)"></span>Challenge day</span><span><span class="swatch" style="background:var(--ideal)"></span>Stool 3-5</span><span><span class="swatch" style="background:var(--hard)"></span>1-2</span><span><span class="swatch" style="background:var(--loose)"></span>6-7</span></div>
+      <div class="legend"><span><span class="swatch" style="background:var(--accent);border-radius:2px;transform:rotate(45deg)"></span>Reintroduction day</span><span><span class="swatch" style="background:var(--ideal)"></span>Stool 3-5</span><span><span class="swatch" style="background:var(--hard)"></span>1-2</span><span><span class="swatch" style="background:var(--loose)"></span>6-7</span></div>
       <div class="chartbox" id="dailyChart" data-dates="${dates.join(",")}"></div>
     </section>
     ${reintroSection(sched)}
@@ -846,43 +894,48 @@ function renderInsights(sched) {
 
 function reintroSection(sched) {
   const t = todayIso();
-  const started = sched.blocks.filter(b => b.start <= t);
-  if (!started.length) {
+  const logs = challengeLogs().filter(l => l.date <= t);
+  if (!logs.length) {
     return `<section class="card"><div class="sec-head"><h2>Reintroduction results</h2></div>
-      <p class="hint">Starts ${fmtLong(sched.start)}. For each block you will see the challenge food and portion next to your bloating, burps, gas and stools, compared with your usual on low FODMAP days.</p></section>`;
+      <p class="hint">Mark a meal as a reintroduction and the results show up here: the food and portion next to your bloating, burps, gas and stools, compared with your usual on low FODMAP days. Your plan suggests starting on ${fmtLong(sched.start)}.</p></section>`;
   }
-  const out = started.map(b => {
-    const base = baseline(sched, b.start);
-    const days = [0, 1, 2, 3, 4].map(i => addDays(b.start, i));
-    const flag = (v, bv) => bv != null && v >= Math.max(bv * 1.5, bv + 1) && v > 0;
-    const rows = days.map((d, i) => {
-      if (d > t) return "";
+  const order = [], by = {};
+  logs.forEach(l => { const k = resultKey(l.g, l.c); if (!by[k]) { by[k] = []; order.push(k); } by[k].push(l); });
+  const testDates = new Set(logs.map(l => l.date));
+  const flag = (v, bv) => bv != null && v > 0 && v >= Math.max(bv * 1.5, bv + 1);
+  const out = order.map(k => {
+    const ls = by[k]; const g = groupInfo(ls[0].g);
+    const lastD = ls[ls.length - 1].date;
+    const base = baseline(sched, ls[0].date);
+    const rows = ls.map(l => ({ d: l.date, l }));
+    for (let i = 1; i <= 2; i++) { const d = addDays(lastD, i); if (d > t || testDates.has(d)) break; rows.push({ d, l: null }); }
+    const body = rows.map(({ d, l }) => {
       const day = state.days[d]; const m = metrics(day);
-      const isCh = i < 3;
-      let lag = "";
-      if (isCh && day && day.challenge && day.challenge.ate) {
-        const c = hmToMin(day.challenge.t);
-        const first = (day.events || []).filter(e => e.type !== "stool" && hmToMin(e.t) >= c).sort((a, b) => hmToMin(a.t) - hmToMin(b.t))[0];
-        lag = first ? `${r1((hmToMin(first.t) - c) / 60)} h` : "none";
+      let lag = "", ctx = "";
+      if (l) {
+        const c0 = hmToMin(l.c.t);
+        const first = (day.events || []).filter(e => e.type !== "stool" && hmToMin(e.t) >= c0).sort((a, b) => hmToMin(a.t) - hmToMin(b.t))[0];
+        lag = first ? `${r1((hmToMin(first.t) - c0) / 60)} h` : "none";
+        const plate = ((day.meals || {})[chMeal(l.c)] || {}).foods;
+        ctx = `<br><small class="hint">${esc(l.c.food)} · ${mealLabel(chMeal(l.c))} ${esc(l.c.t)}${plate && plate.length ? ` with ${esc(plate.join(", "))}` : ""}${l.c.planned != null && l.c.grams != null && Number(l.c.grams) !== Number(l.c.planned) ? ` · plan was ${l.c.planned} g` : ""}</small>`;
       }
-      const st = m.stools.length ? m.stools.join(", ") : "-";
       const cell = (v, bv) => `<td class="num">${flag(v, bv) ? `<span class="hi">${v}</span>` : v}</td>`;
-      const c = day && day.challenge && day.challenge.ate ? day.challenge : null;
-      const cm = c && ((day.meals || {})[chMeal(c)] || {}).foods;
-      const ctx = c ? `<br><small class="hint">${Number(c.grams) !== b.g[i] ? `<strong>Ate ${c.grams} g</strong> · ` : ""}${mealLabel(chMeal(c))} ${esc(c.t)}${cm && cm.length ? ` with ${esc(cm.join(", "))}` : ""}</small>` : "";
-      return `<tr><td>${isCh ? `Day ${i + 1} · <span class="mono">${b.g[i]} g</span>${c ? "" : ' <span class="hint">(not logged)</span>'}` : "Rest"}<br><small class="hint">${fmtDow(d)} ${fmtShort(d)}</small>${ctx}</td>
-        ${cell(m.bloatScore, base && base.bloatScore)}${cell(m.burps, base && base.burps)}${cell(m.gas, base && base.gas)}<td class="num">${st}</td><td class="num">${lag}</td></tr>`;
+      const label = l ? `${l.c.day ? `Day ${l.c.day}` : "Test"}${gramsTxt(l.c) ? ` · <span class="mono">${esc(gramsTxt(l.c))}</span>` : ""}` : "After";
+      return `<tr><td>${label}<br><small class="hint">${fmtDow(d)} ${fmtShort(d)}</small>${ctx}</td>
+        ${cell(m.bloatScore, base && base.bloatScore)}${cell(m.burps, base && base.burps)}${cell(m.gas, base && base.gas)}<td class="num">${m.stools.length ? m.stools.join(", ") : "-"}</td><td class="num">${lag}</td></tr>`;
     }).join("");
-    const o = (state.settings.outcomes || {})[b.n] || {};
-    const pill = o.result === "tolerated" ? '<span class="pill good">Tolerated</span>' : o.result === "partial" ? '<span class="pill mid">Partial</span>' : o.result === "not" ? '<span class="pill bad">Not tolerated</span>' : (t <= b.end ? '<span class="pill now">In progress</span>' : '<span class="pill">Result not set</span>');
+    const o = outcomeOf(k);
+    const recent = diffDays(lastD, t) <= 2;
+    const pill = o.result === "tolerated" ? '<span class="pill good">Tolerated</span>' : o.result === "partial" ? '<span class="pill mid">Partial</span>' : o.result === "not" ? '<span class="pill bad">Not tolerated</span>' : recent ? '<span class="pill now">In progress</span>' : '<span class="pill">Result not set</span>';
+    const title = g.block ? `${esc(g.block.group)} · ${esc([...new Set(ls.map(l => l.c.food))].join(", "))}` : g.key === "other" ? esc(ls[0].c.food) : esc(g.label);
     return `<div class="block-res">
-      <div class="row" style="justify-content:space-between"><div><span class="blk-num">Block ${b.n}</span><h3>${esc(b.group)} · ${esc(b.food)}</h3></div>${pill}</div>
-      <div class="tablewrap"><table class="rt"><thead><tr><th>Day</th><th>Bloating score</th><th>Burps</th><th>Gas</th><th>Stools (Bristol)</th><th>First symptom after food</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="hint">${base ? `Your usual (${base.n} low FODMAP days before): bloating score ${r1(base.bloatScore)}, burps ${r1(base.burps)}, gas ${r1(base.gas)}, ${r1(base.stoolsPerDay)} stools a day. <span class="hi">Highlighted</span> values are clearly above that.` : "Log a few low FODMAP days before the block to get a baseline to compare against."}</p>
+      <div class="row" style="justify-content:space-between"><div><span class="blk-num">${g.block ? `Block ${g.block.n}` : g.key === "other" ? "Other food" : "Bonus"} · from ${fmtShort(ls[0].date)}</span><h3>${title}</h3></div>${pill}</div>
+      <div class="tablewrap"><table class="rt"><thead><tr><th>Day</th><th>Bloating score</th><th>Burps</th><th>Gas</th><th>Stools (Bristol)</th><th>First symptom after food</th></tr></thead><tbody>${body}</tbody></table></div>
+      <p class="hint">${base ? `Your usual (${base.n} low FODMAP days before): bloating score ${r1(base.bloatScore)}, burps ${r1(base.burps)}, gas ${r1(base.gas)}, ${r1(base.stoolsPerDay)} stools a day. <span class="hi">Highlighted</span> values are clearly above that.` : "Log a few low FODMAP days before a test to get a baseline to compare against."}</p>
     </div>`;
   }).join("");
   return `<section class="card"><div class="sec-head"><h2>Reintroduction results</h2><a href="${PLAN_DOC}" target="_blank" rel="noopener">Open plan doc</a></div>
-    <p class="hint">Bloating score adds up severity (mild 1, moderate 2, strong 3). Set each block's result in the Plan tab.</p>${out}</section>`;
+    <p class="hint">Each test shows the days you ate the food plus up to 2 days after. Bloating score adds up severity (mild 1, moderate 2, strong 3). Set block results in the Plan tab.</p>${out}</section>`;
 }
 
 /* ---------- Charts ---------- */
@@ -922,8 +975,8 @@ function drawDaily(sched) {
   let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily symptoms chart">`;
   // challenge bands
   dates.forEach((d, i) => {
-    const e = sched.map[d];
-    if (e && (e.kind === "challenge" || e.kind === "bonus")) {
+    const dd = state.days[d];
+    if (dd && dd.challenge && dd.challenge.ate) {
       const x = left + i * cw;
       svg += `<rect x="${x + 1}" y="${top - 6}" width="${cw - 2}" height="${H - top - axisH + 6}" rx="4" fill="var(--accent-soft)"/>`;
       svg += `<rect x="${x + cw / 2 - 4}" y="${top - 18}" width="8" height="8" transform="rotate(45 ${x + cw / 2} ${top - 14})" fill="var(--accent)"/>`;
@@ -1020,7 +1073,7 @@ function drawDayLines() {
       const cx = x(hmToMin(m.time || mm.def));
       svg += `<rect x="${cx - 6}" y="${y - 6}" width="12" height="12" rx="3" fill="var(--surface)" stroke="var(--muted)" stroke-width="2" data-tip="${esc(`<strong>${mm.label} ${m.time || mm.def}</strong><br>${esc(m.foods.join(", "))}`)}"/>`; });
     if (day.challenge && day.challenge.ate) { const cx = x(hmToMin(day.challenge.t));
-      svg += `<rect x="${cx - 6}" y="${y - 6}" width="12" height="12" transform="rotate(45 ${cx} ${y})" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" data-tip="${esc(`<strong>Challenge ${day.challenge.t}</strong><br>${esc(day.challenge.food)}, ${day.challenge.grams} g`)}"/>`; }
+      svg += `<rect x="${cx - 6}" y="${y - 6}" width="12" height="12" transform="rotate(45 ${cx} ${y})" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" data-tip="${esc(`<strong>Reintroduction ${day.challenge.t}</strong><br>${esc(day.challenge.food)} ${esc(gramsTxt(day.challenge))}`)}"/>`; }
     (day.events || []).forEach(e => {
       if (e.type === "stool") return;
       const cx = x(hmToMin(e.t)); const r = e.type === "bloat" ? 4 + (e.v || 1) : 4.5;
@@ -1039,18 +1092,16 @@ function renderPlan(sched) {
   const t = todayIso();
   const outcomes = state.settings.outcomes || {};
   const blocks = sched.blocks.map(b => {
-    const cur = t >= b.start && t <= b.end;
-    const status = t > b.end ? "Done" : cur ? "Now" : "Upcoming";
     const o = outcomes[b.n] || {};
+    const ls = challengeLogs().filter(l => l.g === "b" + b.n);
+    const next = suggestion(addDays(t, 1)).group === "b" + b.n;
+    const cur = ls.length > 0 && ls.length < 3 && !o.result;
+    const status = o.result || ls.length >= 3 ? "Done" : ls.length ? "In progress" : next ? "Up next" : "Not started";
     return `<div class="blk ${cur ? "current" : ""}">
-      <div class="blk-top"><div><span class="blk-num">Block ${b.n} · ${fmtShort(b.start)} to ${fmtShort(addDays(b.start, 2))}, rest until ${fmtShort(b.end)}</span><h3>${esc(b.group)}</h3><span class="hint">${esc(b.food)}</span></div>
-        <span class="pill ${cur ? "now" : ""}">${status}</span></div>
+      <div class="blk-top"><div><span class="blk-num">Block ${b.n} · suggested ${fmtShort(b.start)} to ${fmtShort(addDays(b.start, 2))}</span><h3>${esc(b.group)}</h3><span class="hint">${esc(b.food)}</span></div>
+        <span class="pill ${cur || status === "Up next" ? "now" : status === "Done" ? "good" : ""}">${status}</span></div>
       <div class="blk-portions">${b.g.map((g, i) => `<span>Day ${i + 1} · ${g} g</span>`).join("")}</div>
-      <div class="row">
-        <span class="hint">Rest days: <strong class="mono">${b.restDays}</strong></span>
-        <button class="btn small" data-rest="${b.n}" data-delta="1">+ Add rest day</button>
-        ${b.restDays > 2 ? `<button class="btn small ghost" data-rest="${b.n}" data-delta="-1">Remove one</button>` : ""}
-      </div>
+      <p class="hint">${ls.length ? `Logged: ${ls.map(l => `${fmtShort(l.date)}${gramsTxt(l.c) ? " " + gramsTxt(l.c) : ""}`).join(" · ")}` : "Nothing logged yet"}</p>
       <div class="row">
         <label class="hint" for="res-${b.n}">Result</label>
         <select id="res-${b.n}" data-outcome="${b.n}">
@@ -1177,7 +1228,7 @@ document.addEventListener("click", ev => {
   if (d.edit) { state.editing = d.edit; render(); return; }
   if (d.del) return deleteEvent(d.del);
   if (el.hasAttribute("data-done")) { state.editing = null; render(); return; }
-  if (el.id === "chLog") { const e = buildSchedule(state.settings).map[state.date]; if (e) logChallenge(e); return; }
+  if (el.id === "chOpen") return openMeal(state.date === todayIso() ? mealForTime(nowHM()) : "lunch", true);
   if (el.id === "chUndo") { const day = structuredClone(getDay(state.date)); day.challenge = null; saveDay(day); return; }
   if (d.meal) return openMeal(d.meal);
   if (d.pick != null && state.sheet) {
@@ -1191,6 +1242,7 @@ document.addEventListener("click", ev => {
     state.sheet.foods = [...new Set([...state.sheet.foods, ...(pm.foods || [])])]; renderSheet(); return;
   }
   if (el.id === "addCustom") return addCustom();
+  if (d.chday && state.sheet) { const n = Number(d.chday); state.sheet.chg = { ...state.sheet.chg, day: n, grams: groupInfo(state.sheet.chg.group).portions[n - 1] }; const st = document.getElementById("sheetBody").scrollTop; renderSheet(); document.getElementById("sheetBody").scrollTop = st; return; }
   if (el.id === "toggleCh" && state.sheet) { state.sheet.ch = !state.sheet.ch; const st = document.getElementById("sheetBody").scrollTop; renderSheet(); document.getElementById("sheetBody").scrollTop = st; return; }
   if (el.id === "saveMeal") return saveMeal(false);
   if (el.id === "clearMeal") return saveMeal(true);
@@ -1249,7 +1301,8 @@ document.addEventListener("input", ev => {
   }
   if (t.id === "mealNote" && state.sheet) state.sheet.note = t.value;
   if (t.id === "mealTime" && state.sheet) state.sheet.time = t.value;
-  if (t.id === "sheetChGrams" && state.sheet) state.sheet.chGrams = t.value === "" ? null : Number(t.value);
+  if (t.id === "chFood" && state.sheet) state.sheet.chg.food = t.value;
+  if (t.id === "chGramsIn" && state.sheet) state.sheet.chg.grams = t.value === "" ? null : Number(t.value);
 });
 document.addEventListener("keydown", ev => {
   if (ev.key === "Enter" && ev.target.id === "customFood") { ev.preventDefault(); addCustom(); }
@@ -1259,6 +1312,7 @@ document.addEventListener("keydown", ev => {
 document.addEventListener("change", ev => {
   const t = ev.target;
   if (t.dataset.evtime) return setEventTime(t.dataset.evtime, t.value);
+  if (t.id === "chGroup" && state.sheet) { state.sheet.chg = groupSuggestion(t.value, state.date); renderSheet(); return; }
   if (t.id === "chGrams") { const day = structuredClone(getDay(state.date)); if (day.challenge && t.value !== "") { day.challenge.grams = Number(t.value); saveDay(day); } return; }
   if (t.id === "chMeal") { const day = structuredClone(getDay(state.date)); if (day.challenge) { day.challenge.meal = t.value; saveDay(day); } return; }
   if (t.id === "chTime") { const day = structuredClone(getDay(state.date)); if (day.challenge && t.value) { day.challenge.t = t.value; saveDay(day); } return; }
