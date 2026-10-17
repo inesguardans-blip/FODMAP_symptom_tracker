@@ -1506,7 +1506,15 @@ document.addEventListener("click", ev => {
   if (d.meal) return openMeal(d.meal);
   if (d.pick != null && state.sheet) {
     const s = state.sheet; const f = d.pick;
-    s.foods = s.foods.includes(f) ? s.foods.filter(x => x !== f) : [...s.foods, f];
+    const adding = !s.foods.includes(f);
+    s.foods = adding ? [...s.foods, f] : s.foods.filter(x => x !== f);
+    if (adding && s.q.trim()) {
+      // picked from a search: clear it so the next food can be typed straight away
+      s.q = ""; renderSheet();
+      document.getElementById("sheetBody").scrollTop = 0;
+      document.getElementById("foodSearch").focus();
+      return;
+    }
     const body = document.getElementById("sheetBody"); const st = body.scrollTop;
     renderSheet(); document.getElementById("sheetBody").scrollTop = st; return;
   }
