@@ -688,6 +688,7 @@ function restAfter(date) {
   if (gap < 1 || gap > 2) return null;
   return !last.g.startsWith("b") || blockDone(last.g.slice(1), date) ? last : null;
 }
+function chNote(day, c) { return (c && c.note) || (((day && day.meals) || {})[chMeal(c)] || {}).note || ""; }
 function gramsTxt(c) { return c && c.grams != null && c.grams !== "" ? `${c.grams} g` : ""; }
 function chTitle(c) { const g = groupInfo(groupOf(c)); return `${g.block ? g.block.group : g.key === "other" ? (c.food || "other food") : g.label}${c.day ? ` day ${c.day}` : ""}`; }
 
@@ -829,7 +830,7 @@ function timeline(day) {
   if (!items.length) return `<div class="empty">Nothing logged ${state.date === todayIso() ? "today" : "on this day"} yet. Tap a symptom above or add a meal below.</div>`;
   return `<div class="tl">${items.map(it => {
     if (it.kind === "meal") return `<div class="tl-item"><span class="tl-time">${esc(it.t)}</span><span class="tl-mark mealm"></span><span class="tl-text"><strong>${it.mm.label}</strong> <small>${esc(it.m.foods.join(", "))}</small></span><span></span></div>`;
-    if (it.kind === "ch") return `<div class="tl-item"><span class="tl-time">${esc(it.t)}</span><span class="tl-mark ch"></span><span class="tl-text"><strong>Reintroduction</strong> <small>${esc(it.c.food)}${gramsTxt(it.c) ? ", " + gramsTxt(it.c) : ""}, with ${mealLabel(chMeal(it.c)).toLowerCase()}</small></span><span></span></div>`;
+    if (it.kind === "ch") return `<div class="tl-item"><span class="tl-time">${esc(it.t)}</span><span class="tl-mark ch"></span><span class="tl-text"><strong>Reintroduction</strong> <small>${esc(it.c.food)}${gramsTxt(it.c) ? ", " + gramsTxt(it.c) : ""}, with ${mealLabel(chMeal(it.c)).toLowerCase()}</small>${chNote(day, it.c) ? `<br><small>${esc(chNote(day, it.c))}</small>` : ""}</span><span></span></div>`;
     const e = it.e;
     let color = SYM[e.type].color, text;
     if (e.type === "stool") { const b = BRISTOL[e.v - 1]; color = `var(--${b.band})`; text = `<strong>Bristol ${e.v}</strong> <small>${b.label}${e.size ? " · " + SIZE_NAME[e.size] : ""}</small>${e.note ? `<br><small>${esc(e.note)}</small>` : ""}`; }
@@ -1040,8 +1041,10 @@ function saveMeal(clear) {
   const s = state.sheet;
   const day = structuredClone(getDay(state.date));
   day.meals = day.meals || {};
-  if (clear || !s.foods.length) delete day.meals[s.k];
-  else day.meals[s.k] = { foods: s.foods, time: s.time, note: s.note };
+  const note = (s.note || "").trim();
+  // keep the meal when it holds foods, a note, or only the reintroduction food
+  if (clear || !(s.foods.length || note || s.ch)) delete day.meals[s.k];
+  else day.meals[s.k] = { foods: s.foods, time: s.time, note };
   const wasHere = day.challenge && day.challenge.ate && chMeal(day.challenge) === s.k;
   if (s.ch && !clear) {
     const g = groupInfo(s.chg.group);
@@ -1049,6 +1052,7 @@ function saveMeal(clear) {
     day.challenge = { ate: true, t: s.time, meal: s.k, group: g.key, block: g.block ? g.block.n : null,
       food: (s.chg.food || g.food || "Test food").trim(), day: s.chg.day || null, grams,
       planned: s.chg.day && g.portions[s.chg.day - 1] != null ? g.portions[s.chg.day - 1] : null };
+    if (note) day.challenge.note = note;
   } else if (wasHere) day.challenge = null;
   closeSheet();
   saveDay(day);
@@ -1139,7 +1143,8 @@ function reintroSection(sched) {
         const first = (day.events || []).filter(e => e.type !== "stool" && hmToMin(e.t) >= c0).sort((a, b) => hmToMin(a.t) - hmToMin(b.t))[0];
         lag = first ? `${r1((hmToMin(first.t) - c0) / 60)} h` : "none";
         const plate = ((day.meals || {})[chMeal(l.c)] || {}).foods;
-        ctx = `<br><small class="hint">${esc(l.c.food)} · ${mealLabel(chMeal(l.c))} ${esc(l.c.t)}${plate && plate.length ? ` with ${esc(plate.join(", "))}` : ""}${l.c.planned != null && l.c.grams != null && Number(l.c.grams) !== Number(l.c.planned) ? ` · plan was ${l.c.planned} g` : ""}</small>`;
+        const cnote = chNote(day, l.c);
+        ctx = `<br><small class="hint">${esc(l.c.food)} · ${mealLabel(chMeal(l.c))} ${esc(l.c.t)}${plate && plate.length ? ` with ${esc(plate.join(", "))}` : ""}${l.c.planned != null && l.c.grams != null && Number(l.c.grams) !== Number(l.c.planned) ? ` · plan was ${l.c.planned} g` : ""}</small>${cnote ? `<br><small class="hint">Note: ${esc(cnote)}</small>` : ""}`;
       }
       const cell = (v, bv) => `<td class="num">${flag(v, bv) ? `<span class="hi">${v}</span>` : v}</td>`;
       const label = l ? `${l.c.day ? `Day ${l.c.day}` : "Test"}${gramsTxt(l.c) ? ` · <span class="mono">${esc(gramsTxt(l.c))}</span>` : ""}` : "After";
