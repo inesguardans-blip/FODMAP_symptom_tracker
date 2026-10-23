@@ -1,19 +1,19 @@
-import { configured, authed, redis, pipeline, readBody, send } from "./_lib.js";
+import { configured, authed, keysFor, redis, pipeline, readBody, send } from "./_lib.js";
 
-const DAYS = "gutlog:days";         // hash: YYYY-MM-DD -> day JSON
-const SETTINGS = "gutlog:settings"; // string: settings JSON
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_DOC = 200_000;
 
 export default async function handler(req, res) {
   if (!configured()) return send(res, 500, { error: "not_configured" });
-  if (!authed(req)) return send(res, 401, { error: "login_required" });
+  const user = authed(req);
+  if (!user) return send(res, 401, { error: "login_required" });
+  const { days: DAYS, settings: SETTINGS } = keysFor(user); // hash YYYY-MM-DD -> day JSON, and settings JSON
   try {
     if (req.method === "GET") {
       const [flat, settings] = await pipeline([["HGETALL", DAYS], ["GET", SETTINGS]]);
       const days = {};
       for (let i = 0; i < (flat || []).length; i += 2) days[flat[i]] = JSON.parse(flat[i + 1]);
-      return send(res, 200, { days, settings: settings ? JSON.parse(settings) : null });
+      return send(res, 200, { days, settings: settings ? JSON.parse(settings) : null, user: user === "main" ? null : user });
     }
     if (req.method === "PUT") {
       let b;

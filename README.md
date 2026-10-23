@@ -34,6 +34,16 @@ No npm packages are needed. The build only uses Node's standard library.
 
 Optional: set `SESSION_SECRET` to a random string if you want to change the password without signing devices out.
 
+## More people
+
+Each extra person gets her own password and her own separate log, using the same food list and reintroduction plan.
+
+1. In *Settings → Environment Variables*, add `APP_USERS` with `name:password`, for example `maria:a-long-password`. For several people, separate them with `;`: `maria:pass-one;laura:pass-two`. Names use lowercase letters, digits, `-` or `_`.
+2. Redeploy.
+3. She opens the same site and signs in with her password. Settings shows "Signed in as Maria".
+
+Every password must be different, because the password decides whose log opens. The original `APP_PASSWORD` keeps its existing data. Removing someone from `APP_USERS` (and redeploying) signs her out everywhere; her data stays in the database.
+
 ## Move your data from the Claude artifact
 
 1. In the artifact, open **Settings → Export data** and save the file.

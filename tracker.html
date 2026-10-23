@@ -539,6 +539,7 @@ function applyServer(o) {
   const days = { ...(o.days || {}) };
   Object.keys(p).forEach(k => { if (k.startsWith("d:")) { const d = k.slice(2); if (state.days[d]) days[d] = state.days[d]; } });
   state.days = days;
+  state.user = o.user || null;
   if (!p.settings) state.settings = Object.assign(DEFAULT_SETTINGS(), o.settings || {});
   localSave();
 }
@@ -1436,7 +1437,7 @@ function renderSettings() {
     <section class="card"><div class="sec-head"><h2>Your data</h2></div>
       <p class="hint">Export a backup file, or import one, for example when moving to your own website.</p>
       <div class="row"><button class="btn" id="exportBtn">Export data</button><label class="btn" for="importFile" style="cursor:pointer">Import data</label><input type="file" id="importFile" accept="application/json,.json" hidden></div>
-      ${state.backend === "api" || state.backend === "offline" ? '<div class="row"><button class="btn small ghost" id="logoutBtn">Sign out of this device</button></div>' : ""}
+      ${state.backend === "api" || state.backend === "offline" ? `<div class="row"><span class="hint">Signed in${state.user ? " as " + esc(state.user.charAt(0).toUpperCase() + state.user.slice(1)) : ""}</span><button class="btn small ghost" id="logoutBtn">Sign out of this device</button></div>` : ""}
       ${state.confirmImport ? `<div class="confirm"><p>This file has ${Object.keys(state.confirmImport.days || {}).length} days. Days with the same date will be replaced.</p><div class="row"><button class="btn primary" id="importYes">Import</button><button class="btn ghost" id="importNo">Cancel</button></div></div>` : ""}
       ${storageNote()}
     </section>`;
